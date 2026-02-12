@@ -109,6 +109,49 @@ def get_instrument(symbol: str) -> Optional[FuturesInstrument]:
     return INSTRUMENTS.get(symbol.upper())
 
 
+# ── Contract Symbol Builder ────────────────────────────────────────────
+
+# CME standard month codes
+MONTH_CODES = {
+    1: "F",   # January
+    2: "G",   # February
+    3: "H",   # March
+    4: "J",   # April
+    5: "K",   # May
+    6: "M",   # June
+    7: "N",   # July
+    8: "Q",   # August
+    9: "U",   # September
+    10: "V",  # October
+    11: "X",  # November
+    12: "Z",  # December
+}
+
+MONTH_NAMES = [
+    "January (F)", "February (G)", "March (H)", "April (J)",
+    "May (K)", "June (M)", "July (N)", "August (Q)",
+    "September (U)", "October (V)", "November (X)", "December (Z)",
+]
+
+
+def build_contract_symbol(instrument: str, month: int, year: int) -> str:
+    """
+    Build a standard contract symbol from instrument, month, and year.
+
+    E.g. build_contract_symbol("ES", 3, 2025) -> "ESH25"
+         build_contract_symbol("MES", 6, 2026) -> "MESM26"
+    """
+    code = MONTH_CODES[month]
+    yy = year % 100
+    return f"{instrument}{code}{yy:02d}"
+
+
+def month_from_name(display_name: str) -> int:
+    """Extract 1-based month number from a display name like 'March (H)'."""
+    idx = MONTH_NAMES.index(display_name)
+    return idx + 1
+
+
 def instrument_display_list() -> list[str]:
     """Return formatted display strings for use in a dropdown, grouped by category."""
     items = []

@@ -15,6 +15,9 @@ from futures_instruments import (
     instrument_display_list,
     symbol_from_display,
     fetch_price_for_instrument,
+    MONTH_NAMES,
+    month_from_name,
+    build_contract_symbol,
 )
 
 # ── Page Config ────────────────────────────────────────────────────────
@@ -80,12 +83,29 @@ with st.sidebar:
                 f"${selected_inst.multiplier:,.2f}/pt"
             )
 
+        # Contract month/year selectors (outside form for instant preview)
+        from datetime import date as _date_type
+        _today = _date_type.today()
+        _col_m, _col_y = st.columns(2)
+        with _col_m:
+            init_month_name = st.selectbox(
+                "Contract Month", MONTH_NAMES,
+                index=_today.month - 1,
+                key="init_contract_month",
+            )
+        with _col_y:
+            init_year = st.number_input(
+                "Contract Year", min_value=2000, max_value=2099,
+                value=_today.year, step=1,
+                key="init_contract_year",
+            )
+        init_month_num = month_from_name(init_month_name)
+        init_symbol = build_contract_symbol(selected_symbol, init_month_num, init_year)
+        st.caption(f"Contract Symbol: **{init_symbol}**")
+
         with st.form("new_ledger_form"):
             st.markdown("---")
             st.subheader("Initial Entry")
-            init_symbol = st.text_input(
-                "Contract Symbol", placeholder="ESH25, NQM25..."
-            )
             init_direction = st.selectbox("Direction", ["LONG", "SHORT"])
             init_date = st.date_input("Entry Date")
             init_price = st.number_input(
@@ -110,15 +130,15 @@ with st.sidebar:
                 st.error(f"No data found for {selected_inst.yahoo_ticker} on {init_date}.")
 
         if submitted:
-            if not selected_symbol or not init_symbol or init_price <= 0:
-                st.error("Select an instrument, enter contract symbol, and a positive entry price.")
+            if not selected_symbol or init_price <= 0:
+                st.error("Select an instrument and enter a positive entry price.")
             else:
                 ledger = RollLedger(
                     instrument=selected_symbol,
                     contract_multiplier=selected_inst.multiplier if selected_inst else 50.0,
                 )
                 ledger.add_initial_entry(
-                    contract_symbol=init_symbol.upper().strip(),
+                    contract_symbol=init_symbol,
                     entry_date=str(init_date),
                     entry_price=init_price,
                     quantity=init_qty,
@@ -307,6 +327,25 @@ if active:
 
     with action_col1:
         st.subheader("Roll Into New Contract")
+
+        # New contract month/year (outside form for instant symbol preview)
+        _roll_col_m, _roll_col_y = st.columns(2)
+        with _roll_col_m:
+            roll_month_name = st.selectbox(
+                "New Contract Month", MONTH_NAMES,
+                key="roll_contract_month",
+            )
+        with _roll_col_y:
+            from datetime import date as _date_type
+            roll_year = st.number_input(
+                "New Contract Year", min_value=2000, max_value=2099,
+                value=_date_type.today().year, step=1,
+                key="roll_contract_year",
+            )
+        roll_month_num = month_from_name(roll_month_name)
+        new_symbol = build_contract_symbol(ledger.instrument, roll_month_num, roll_year)
+        st.caption(f"New Contract Symbol: **{new_symbol}**")
+
         with st.form("roll_form"):
             roll_exit_price = st.number_input(
                 "Exit Price (current contract)",
@@ -318,9 +357,6 @@ if active:
             )
             roll_exit_date = st.date_input("Exit/Roll Date", key="roll_exit_date")
             fetch_roll = st.form_submit_button("Fetch Roll Date Price")
-            new_symbol = st.text_input(
-                "New Contract Symbol", placeholder="ESM25, ESU25...", key="new_symbol"
-            )
             new_price = st.number_input(
                 "New Entry Price",
                 min_value=0.0,
@@ -353,13 +389,13 @@ if active:
                     st.error(f"No data for {roll_inst.yahoo_ticker} on {roll_exit_date}.")
 
         if roll_submitted:
-            if roll_exit_price <= 0 or new_price <= 0 or not new_symbol:
-                st.error("Provide valid exit price, new symbol, and new entry price.")
+            if roll_exit_price <= 0 or new_price <= 0:
+                st.error("Provide valid exit price and new entry price.")
             else:
                 ledger.roll_contract(
                     exit_price=roll_exit_price,
                     exit_date=str(roll_exit_date),
-                    new_contract_symbol=new_symbol.upper().strip(),
+                    new_contract_symbol=new_symbol,
                     new_entry_price=new_price,
                     new_entry_date=str(roll_exit_date),
                     new_quantity=new_qty,

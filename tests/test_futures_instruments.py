@@ -7,6 +7,10 @@ from futures_instruments import (
     instrument_display_list,
     symbol_from_display,
     fetch_price_for_instrument,
+    MONTH_CODES,
+    MONTH_NAMES,
+    build_contract_symbol,
+    month_from_name,
 )
 
 
@@ -75,6 +79,47 @@ class TestInstrumentCatalog:
         assert get_instrument("MNQ").multiplier == get_instrument("NQ").multiplier / 10
         assert get_instrument("MCL").multiplier == get_instrument("CL").multiplier / 10
         assert get_instrument("MGC").multiplier == get_instrument("GC").multiplier / 10
+
+
+class TestContractSymbolBuilder:
+    def test_es_march_2025(self):
+        assert build_contract_symbol("ES", 3, 2025) == "ESH25"
+
+    def test_mes_june_2026(self):
+        assert build_contract_symbol("MES", 6, 2026) == "MESM26"
+
+    def test_nq_december_2025(self):
+        assert build_contract_symbol("NQ", 12, 2025) == "NQZ25"
+
+    def test_cl_january_2030(self):
+        assert build_contract_symbol("CL", 1, 2030) == "CLF30"
+
+    def test_gc_september_2025(self):
+        assert build_contract_symbol("GC", 9, 2025) == "GCU25"
+
+    def test_all_month_codes(self):
+        expected = {
+            1: "F", 2: "G", 3: "H", 4: "J", 5: "K", 6: "M",
+            7: "N", 8: "Q", 9: "U", 10: "V", 11: "X", 12: "Z",
+        }
+        for month_num, code in expected.items():
+            sym = build_contract_symbol("ES", month_num, 2025)
+            assert sym == f"ES{code}25"
+
+    def test_month_names_count(self):
+        assert len(MONTH_NAMES) == 12
+
+    def test_month_from_name_roundtrip(self):
+        for i, name in enumerate(MONTH_NAMES, start=1):
+            assert month_from_name(name) == i
+
+    def test_month_from_name_to_symbol(self):
+        month_num = month_from_name("March (H)")
+        assert build_contract_symbol("ES", month_num, 2025) == "ESH25"
+
+    def test_two_digit_year_padding(self):
+        # Year 2005 -> "05" not "5"
+        assert build_contract_symbol("ES", 3, 2005) == "ESH05"
 
 
 class TestPriceFetching:
