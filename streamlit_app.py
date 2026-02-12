@@ -75,7 +75,8 @@ with st.sidebar:
             init_direction = st.selectbox("Direction", ["LONG", "SHORT"])
             init_date = st.date_input("Entry Date")
             init_price = st.number_input(
-                "Entry Price", min_value=0.0, value=0.0, step=0.25, format="%.4f"
+                "Entry Price", min_value=0.0, step=0.25, format="%.4f",
+                key="init_entry_price",
             )
             fetch_init = st.form_submit_button("Fetch Price from Yahoo Finance")
             init_qty = st.number_input(
@@ -85,14 +86,12 @@ with st.sidebar:
 
             submitted = st.form_submit_button("Create Ledger")
 
-        # Handle fetch outside form to update state
         if fetch_init and selected_inst:
             with st.spinner(f"Fetching {selected_inst.yahoo_ticker} close for {init_date}..."):
                 price = fetch_price_for_instrument(selected_symbol, init_date)
             if price is not None:
-                st.session_state["fetched_init_price"] = price
-                st.success(f"Fetched close: {price:,.4f}")
-                st.info("Copy this price into the Entry Price field above, then click Create Ledger.")
+                st.session_state["init_entry_price"] = price
+                st.rerun()
             else:
                 st.error(f"No data found for {selected_inst.yahoo_ticker} on {init_date}.")
 
@@ -333,8 +332,9 @@ if active:
                 with st.spinner(f"Fetching {roll_inst.yahoo_ticker} close for {roll_exit_date}..."):
                     price = fetch_price_for_instrument(ledger.instrument, roll_exit_date)
                 if price is not None:
-                    st.success(f"Fetched close for {roll_exit_date}: **{price:,.4f}**")
-                    st.info("Copy this into Exit Price and/or New Entry Price above.")
+                    st.session_state["roll_exit_price"] = price
+                    st.session_state["new_entry_price"] = price
+                    st.rerun()
                 else:
                     st.error(f"No data for {roll_inst.yahoo_ticker} on {roll_exit_date}.")
 
@@ -381,8 +381,8 @@ if active:
                 with st.spinner(f"Fetching {close_inst.yahoo_ticker} close for {close_date}..."):
                     price = fetch_price_for_instrument(ledger.instrument, close_date)
                 if price is not None:
-                    st.success(f"Fetched close for {close_date}: **{price:,.4f}**")
-                    st.info("Copy this into Exit Price above.")
+                    st.session_state["close_exit_price"] = price
+                    st.rerun()
                 else:
                     st.error(f"No data for {close_inst.yahoo_ticker} on {close_date}.")
 
