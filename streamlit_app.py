@@ -31,6 +31,20 @@ st.caption(
 if "ledger" not in st.session_state:
     st.session_state.ledger = None
 
+# Transfer any pending fetched prices into widget keys BEFORE widgets render.
+# This avoids the StreamlitAPIException from writing to a widget-owned key
+# after the widget has already been instantiated in the same script run.
+_PENDING_TRANSFERS = {
+    "_pending_init_price": "init_entry_price",
+    "_pending_current_price": "current_price",
+    "_pending_roll_exit_price": "roll_exit_price",
+    "_pending_new_entry_price": "new_entry_price",
+    "_pending_close_exit_price": "close_exit_price",
+}
+for _src, _dst in _PENDING_TRANSFERS.items():
+    if _src in st.session_state:
+        st.session_state[_dst] = st.session_state.pop(_src)
+
 
 def get_ledger() -> RollLedger | None:
     return st.session_state.ledger
@@ -90,7 +104,7 @@ with st.sidebar:
             with st.spinner(f"Fetching {selected_inst.yahoo_ticker} close for {init_date}..."):
                 price = fetch_price_for_instrument(selected_symbol, init_date)
             if price is not None:
-                st.session_state["init_entry_price"] = price
+                st.session_state["_pending_init_price"] = price
                 st.rerun()
             else:
                 st.error(f"No data found for {selected_inst.yahoo_ticker} on {init_date}.")
@@ -176,7 +190,7 @@ with col_fetch:
         with st.spinner(f"Fetching {inst.yahoo_ticker}..."):
             price = fetch_price_for_instrument(ledger.instrument, date_type.today())
         if price is not None:
-            st.session_state["current_price"] = price
+            st.session_state["_pending_current_price"] = price
             st.rerun()
         else:
             st.error("Could not fetch price.")
@@ -332,8 +346,8 @@ if active:
                 with st.spinner(f"Fetching {roll_inst.yahoo_ticker} close for {roll_exit_date}..."):
                     price = fetch_price_for_instrument(ledger.instrument, roll_exit_date)
                 if price is not None:
-                    st.session_state["roll_exit_price"] = price
-                    st.session_state["new_entry_price"] = price
+                    st.session_state["_pending_roll_exit_price"] = price
+                    st.session_state["_pending_new_entry_price"] = price
                     st.rerun()
                 else:
                     st.error(f"No data for {roll_inst.yahoo_ticker} on {roll_exit_date}.")
@@ -381,7 +395,7 @@ if active:
                 with st.spinner(f"Fetching {close_inst.yahoo_ticker} close for {close_date}..."):
                     price = fetch_price_for_instrument(ledger.instrument, close_date)
                 if price is not None:
-                    st.session_state["close_exit_price"] = price
+                    st.session_state["_pending_close_exit_price"] = price
                     st.rerun()
                 else:
                     st.error(f"No data for {close_inst.yahoo_ticker} on {close_date}.")
