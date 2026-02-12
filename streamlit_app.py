@@ -18,6 +18,7 @@ from futures_instruments import (
     MONTH_NAMES,
     month_from_name,
     build_contract_symbol,
+    fetch_roll_volume,
 )
 
 # ── Page Config ────────────────────────────────────────────────────────
@@ -317,6 +318,103 @@ if len(series) > 1:
         ], ignore_index=True)
 
     st.line_chart(chart_df, x="date", y="cum_pnl")
+
+# ── Roll Signal: Volume Crossover ─────────────────────────────────────
+
+if active:
+    st.markdown("---")
+    st.subheader("Roll Signal: Volume Crossover")
+    st.caption(
+        "When the back-month volume exceeds the front-month, liquidity has "
+        "shifted and it's time to roll."
+    )
+
+    # Parse front month from active contract symbol (e.g. "ESH26" -> month=3, year=2026)
+    from futures_instruments import MONTH_CODES
+    _code_to_month = {v: k for k, v in MONTH_CODES.items()}
+    _active_sym = active.contract_symbol
+    # The month code is the character just before the 2-digit year at the end
+    _front_month_code = _active_sym[-3] if len(_active_sym) >= 3 else None
+    _front_year_2d = _active_sym[-2:] if len(_active_sym) >= 3 else None
+    _front_month = _code_to_month.get(_front_month_code) if _front_month_code else None
+    _front_year = 2000 + int(_front_year_2d) if _front_year_2d and _front_year_2d.isdigit() else None
+
+    sig_col1, sig_col2 = st.columns(2)
+    with sig_col1:
+        st.markdown(f"**Front month (current):** `{_active_sym}`")
+    with sig_col2:
+        _back_m_col, _back_y_col = st.columns(2)
+        with _back_m_col:
+            back_month_name = st.selectbox(
+                "Back Month", MONTH_NAMES, key="signal_back_month",
+            )
+        with _back_y_col:
+            from datetime import date as _date_type
+            back_year = st.number_input(
+                "Back Year", min_value=2000, max_value=2099,
+                value=_date_type.today().year, step=1,
+                key="signal_back_year",
+            )
+
+    back_month_num = month_from_name(back_month_name)
+    back_symbol = build_contract_symbol(ledger.instrument, back_month_num, back_year)
+    st.caption(f"Back month: **{back_symbol}**")
+
+    if _front_month and _front_year and st.button("Check Volume Crossover", key="check_roll_signal"):
+        with st.spinner("Fetching volume data..."):
+            vol_data = fetch_roll_volume(
+                instrument=ledger.instrument,
+                front_month=_front_month,
+                front_year=_front_year,
+                back_month=back_month_num,
+                back_year=back_year,
+            )
+
+        if vol_data is None:
+            st.error(
+                "Could not fetch volume data. This contract may not have "
+                "specific-month tickers available on Yahoo Finance."
+            )
+        else:
+            # Metrics
+            vm1, vm2, vm3 = st.columns(3)
+            with vm1:
+                st.metric(
+                    f"Front Vol ({vol_data.front_ticker})",
+                    f"{vol_data.latest_front_vol:,}",
+                )
+            with vm2:
+                st.metric(
+                    f"Back Vol ({vol_data.back_ticker})",
+                    f"{vol_data.latest_back_vol:,}",
+                )
+            with vm3:
+                st.metric(
+                    "Liquidity Ratio",
+                    f"{vol_data.ratio:.2f}x",
+                    help="Back volume / Front volume. > 1.0 means back month dominates.",
+                )
+
+            if vol_data.ratio > 1.0:
+                st.success(
+                    f"ROLL SIGNAL: Back month has higher volume "
+                    f"({vol_data.ratio:.2f}x). Liquidity has shifted — consider rolling now."
+                )
+            else:
+                st.info(
+                    f"Front month still dominant ({vol_data.ratio:.2f}x). "
+                    f"Wait until ratio exceeds 1.0."
+                )
+
+            # Volume crossover chart
+            vol_chart_df = pd.DataFrame({
+                "date": vol_data.dates,
+                f"Front ({vol_data.front_ticker})": vol_data.front_volume,
+                f"Back ({vol_data.back_ticker})": vol_data.back_volume,
+            })
+            vol_chart_df["date"] = pd.to_datetime(vol_chart_df["date"])
+            vol_chart_df = vol_chart_df.set_index("date")
+            st.line_chart(vol_chart_df)
 
 # ── Actions: Roll Contract / Close Position ────────────────────────────
 

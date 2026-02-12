@@ -11,6 +11,8 @@ from futures_instruments import (
     MONTH_NAMES,
     build_contract_symbol,
     month_from_name,
+    build_yahoo_contract_ticker,
+    fetch_roll_volume,
 )
 
 
@@ -120,6 +122,43 @@ class TestContractSymbolBuilder:
     def test_two_digit_year_padding(self):
         # Year 2005 -> "05" not "5"
         assert build_contract_symbol("ES", 3, 2005) == "ESH05"
+
+
+class TestYahooContractTicker:
+    def test_es_cme(self):
+        assert build_yahoo_contract_ticker("ES", 3, 2026) == "ESH26.CME"
+
+    def test_zb_cbot(self):
+        assert build_yahoo_contract_ticker("ZB", 6, 2026) == "ZBM26.CBT"
+
+    def test_cl_nymex(self):
+        assert build_yahoo_contract_ticker("CL", 12, 2025) == "CLZ25.NYM"
+
+    def test_gc_comex(self):
+        assert build_yahoo_contract_ticker("GC", 4, 2026) == "GCJ26.CMX"
+
+    def test_unknown_instrument_returns_none(self):
+        assert build_yahoo_contract_ticker("FAKE", 1, 2025) is None
+
+    def test_mes_micro_cme(self):
+        assert build_yahoo_contract_ticker("MES", 9, 2026) == "MESU26.CME"
+
+
+class TestRollVolume:
+    def test_fetch_es_volume(self):
+        """Fetch volume data for ES front/back months (requires network)."""
+        data = fetch_roll_volume("ES", 3, 2026, 6, 2026, period="5d")
+        assert data is not None
+        assert data.front_ticker == "ESH26.CME"
+        assert data.back_ticker == "ESM26.CME"
+        assert data.latest_front_vol >= 0
+        assert data.latest_back_vol >= 0
+        assert data.ratio >= 0
+        assert len(data.dates) > 0
+
+    def test_unknown_instrument_returns_none(self):
+        data = fetch_roll_volume("FAKE", 1, 2025, 3, 2025)
+        assert data is None
 
 
 class TestPriceFetching:
