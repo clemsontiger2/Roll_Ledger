@@ -9,6 +9,13 @@ Adjusted Cost Basis (Breakeven Price).
 import streamlit as st
 import pandas as pd
 from roll_ledger import RollLedger, RollEntry
+from futures_instruments import (
+    INSTRUMENTS,
+    get_instrument,
+    instrument_display_list,
+    symbol_from_display,
+    fetch_price_for_instrument,
+)
 
 # ── Page Config ────────────────────────────────────────────────────────
 
@@ -41,18 +48,25 @@ with st.sidebar:
     tab_new, tab_import = st.tabs(["New Ledger", "Import CSV"])
 
     with tab_new:
+        st.subheader("Create New Ledger")
+
+        # Instrument dropdown (outside form so changes update multiplier instantly)
+        display_options = instrument_display_list()
+        selected_display = st.selectbox(
+            "Instrument",
+            options=display_options,
+            index=0,
+            key="instrument_select",
+        )
+        selected_symbol = symbol_from_display(selected_display)
+        selected_inst = get_instrument(selected_symbol)
+        if selected_inst:
+            st.caption(
+                f"{selected_inst.exchange} | Multiplier: "
+                f"${selected_inst.multiplier:,.2f}/pt"
+            )
+
         with st.form("new_ledger_form"):
-            st.subheader("Create New Ledger")
-            instrument = st.text_input(
-                "Instrument", placeholder="ES, NQ, CL, GC..."
-            )
-            multiplier = st.number_input(
-                "Contract Multiplier ($)",
-                min_value=0.01,
-                value=50.0,
-                step=5.0,
-                help="Dollar value per price point. E.g. ES=$50, NQ=$20, CL=$1000",
-            )
             st.markdown("---")
             st.subheader("Initial Entry")
             init_symbol = st.text_input(
@@ -63,30 +77,43 @@ with st.sidebar:
             init_price = st.number_input(
                 "Entry Price", min_value=0.0, value=0.0, step=0.25, format="%.4f"
             )
+            fetch_init = st.form_submit_button("Fetch Price from Yahoo Finance")
             init_qty = st.number_input(
                 "Quantity", min_value=1, value=1, step=1
             )
             init_notes = st.text_input("Notes (optional)", key="init_notes")
 
             submitted = st.form_submit_button("Create Ledger")
-            if submitted:
-                if not instrument or not init_symbol or init_price <= 0:
-                    st.error("Fill in instrument, contract symbol, and a positive entry price.")
-                else:
-                    ledger = RollLedger(
-                        instrument=instrument.upper().strip(),
-                        contract_multiplier=multiplier,
-                    )
-                    ledger.add_initial_entry(
-                        contract_symbol=init_symbol.upper().strip(),
-                        entry_date=str(init_date),
-                        entry_price=init_price,
-                        quantity=init_qty,
-                        direction=init_direction,
-                        notes=init_notes,
-                    )
-                    set_ledger(ledger)
-                    st.success(f"Ledger created for {instrument.upper()}")
+
+        # Handle fetch outside form to update state
+        if fetch_init and selected_inst:
+            with st.spinner(f"Fetching {selected_inst.yahoo_ticker} close for {init_date}..."):
+                price = fetch_price_for_instrument(selected_symbol, init_date)
+            if price is not None:
+                st.session_state["fetched_init_price"] = price
+                st.success(f"Fetched close: {price:,.4f}")
+                st.info("Copy this price into the Entry Price field above, then click Create Ledger.")
+            else:
+                st.error(f"No data found for {selected_inst.yahoo_ticker} on {init_date}.")
+
+        if submitted:
+            if not selected_symbol or not init_symbol or init_price <= 0:
+                st.error("Select an instrument, enter contract symbol, and a positive entry price.")
+            else:
+                ledger = RollLedger(
+                    instrument=selected_symbol,
+                    contract_multiplier=selected_inst.multiplier if selected_inst else 50.0,
+                )
+                ledger.add_initial_entry(
+                    contract_symbol=init_symbol.upper().strip(),
+                    entry_date=str(init_date),
+                    entry_price=init_price,
+                    quantity=init_qty,
+                    direction=init_direction,
+                    notes=init_notes,
+                )
+                set_ledger(ledger)
+                st.success(f"Ledger created for {selected_symbol}")
 
     with tab_import:
         st.subheader("Import from CSV")
@@ -129,7 +156,7 @@ st.header(f"{ledger.instrument} Roll Ledger")
 
 active = ledger.active_roll
 
-col_price, col_calc = st.columns(2)
+col_price, col_fetch, col_calc = st.columns([2, 1, 1])
 
 with col_price:
     current_price = st.number_input(
@@ -140,6 +167,20 @@ with col_price:
         format="%.4f",
         key="current_price",
     )
+
+with col_fetch:
+    st.write("")  # spacing
+    st.write("")
+    inst = get_instrument(ledger.instrument)
+    if inst and st.button("Fetch Latest Price", key="fetch_current"):
+        from datetime import date as date_type
+        with st.spinner(f"Fetching {inst.yahoo_ticker}..."):
+            price = fetch_price_for_instrument(ledger.instrument, date_type.today())
+        if price is not None:
+            st.session_state["current_price"] = price
+            st.rerun()
+        else:
+            st.error("Could not fetch price.")
 
 # Compute metrics
 breakeven = ledger.breakeven_price()
@@ -263,6 +304,7 @@ if active:
                 key="roll_exit_price",
             )
             roll_exit_date = st.date_input("Exit/Roll Date", key="roll_exit_date")
+            fetch_roll = st.form_submit_button("Fetch Roll Date Price")
             new_symbol = st.text_input(
                 "New Contract Symbol", placeholder="ESM25, ESU25...", key="new_symbol"
             )
@@ -284,26 +326,38 @@ if active:
             roll_notes = st.text_input("Notes (optional)", key="roll_notes")
 
             roll_submitted = st.form_submit_button("Execute Roll")
-            if roll_submitted:
-                if roll_exit_price <= 0 or new_price <= 0 or not new_symbol:
-                    st.error("Provide valid exit price, new symbol, and new entry price.")
+
+        if fetch_roll:
+            roll_inst = get_instrument(ledger.instrument)
+            if roll_inst:
+                with st.spinner(f"Fetching {roll_inst.yahoo_ticker} close for {roll_exit_date}..."):
+                    price = fetch_price_for_instrument(ledger.instrument, roll_exit_date)
+                if price is not None:
+                    st.success(f"Fetched close for {roll_exit_date}: **{price:,.4f}**")
+                    st.info("Copy this into Exit Price and/or New Entry Price above.")
                 else:
-                    ledger.roll_contract(
-                        exit_price=roll_exit_price,
-                        exit_date=str(roll_exit_date),
-                        new_contract_symbol=new_symbol.upper().strip(),
-                        new_entry_price=new_price,
-                        new_entry_date=str(roll_exit_date),
-                        new_quantity=new_qty,
-                        notes=roll_notes,
-                    )
-                    set_ledger(ledger)
-                    st.success(
-                        f"Rolled from {active.contract_symbol} to {new_symbol.upper()}. "
-                        f"Realized P&L on this roll: "
-                        f"${active.realized_pnl(ledger.contract_multiplier):,.2f}"
-                    )
-                    st.rerun()
+                    st.error(f"No data for {roll_inst.yahoo_ticker} on {roll_exit_date}.")
+
+        if roll_submitted:
+            if roll_exit_price <= 0 or new_price <= 0 or not new_symbol:
+                st.error("Provide valid exit price, new symbol, and new entry price.")
+            else:
+                ledger.roll_contract(
+                    exit_price=roll_exit_price,
+                    exit_date=str(roll_exit_date),
+                    new_contract_symbol=new_symbol.upper().strip(),
+                    new_entry_price=new_price,
+                    new_entry_date=str(roll_exit_date),
+                    new_quantity=new_qty,
+                    notes=roll_notes,
+                )
+                set_ledger(ledger)
+                st.success(
+                    f"Rolled from {active.contract_symbol} to {new_symbol.upper()}. "
+                    f"Realized P&L on this roll: "
+                    f"${active.realized_pnl(ledger.contract_multiplier):,.2f}"
+                )
+                st.rerun()
 
     with action_col2:
         st.subheader("Close Position")
@@ -317,19 +371,32 @@ if active:
                 key="close_exit_price",
             )
             close_date = st.date_input("Close Date", key="close_date")
+            fetch_close = st.form_submit_button("Fetch Close Date Price")
 
             close_submitted = st.form_submit_button("Close Position")
-            if close_submitted:
-                if close_price <= 0:
-                    st.error("Provide a valid exit price.")
+
+        if fetch_close:
+            close_inst = get_instrument(ledger.instrument)
+            if close_inst:
+                with st.spinner(f"Fetching {close_inst.yahoo_ticker} close for {close_date}..."):
+                    price = fetch_price_for_instrument(ledger.instrument, close_date)
+                if price is not None:
+                    st.success(f"Fetched close for {close_date}: **{price:,.4f}**")
+                    st.info("Copy this into Exit Price above.")
                 else:
-                    ledger.close_position(
-                        exit_price=close_price,
-                        exit_date=str(close_date),
-                    )
-                    set_ledger(ledger)
-                    st.success("Position closed.")
-                    st.rerun()
+                    st.error(f"No data for {close_inst.yahoo_ticker} on {close_date}.")
+
+        if close_submitted:
+            if close_price <= 0:
+                st.error("Provide a valid exit price.")
+            else:
+                ledger.close_position(
+                    exit_price=close_price,
+                    exit_date=str(close_date),
+                )
+                set_ledger(ledger)
+                st.success("Position closed.")
+                st.rerun()
 else:
     st.info("No active position. Create a new ledger or import one from the sidebar.")
 
