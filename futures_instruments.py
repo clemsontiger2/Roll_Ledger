@@ -109,6 +109,49 @@ def get_instrument(symbol: str) -> Optional[FuturesInstrument]:
     return INSTRUMENTS.get(symbol.upper())
 
 
+# ── Contract Symbol Builder ────────────────────────────────────────────
+
+# CME standard month codes
+MONTH_CODES = {
+    1: "F",   # January
+    2: "G",   # February
+    3: "H",   # March
+    4: "J",   # April
+    5: "K",   # May
+    6: "M",   # June
+    7: "N",   # July
+    8: "Q",   # August
+    9: "U",   # September
+    10: "V",  # October
+    11: "X",  # November
+    12: "Z",  # December
+}
+
+MONTH_NAMES = [
+    "January (F)", "February (G)", "March (H)", "April (J)",
+    "May (K)", "June (M)", "July (N)", "August (Q)",
+    "September (U)", "October (V)", "November (X)", "December (Z)",
+]
+
+
+def build_contract_symbol(instrument: str, month: int, year: int) -> str:
+    """
+    Build a standard contract symbol from instrument, month, and year.
+
+    E.g. build_contract_symbol("ES", 3, 2025) -> "ESH25"
+         build_contract_symbol("MES", 6, 2026) -> "MESM26"
+    """
+    code = MONTH_CODES[month]
+    yy = year % 100
+    return f"{instrument}{code}{yy:02d}"
+
+
+def month_from_name(display_name: str) -> int:
+    """Extract 1-based month number from a display name like 'March (H)'."""
+    idx = MONTH_NAMES.index(display_name)
+    return idx + 1
+
+
 def instrument_display_list() -> list[str]:
     """Return formatted display strings for use in a dropdown, grouped by category."""
     items = []
@@ -120,6 +163,108 @@ def instrument_display_list() -> list[str]:
 def symbol_from_display(display: str) -> str:
     """Extract the symbol from a display string like 'ES — E-mini S&P 500 ($50.00/pt)'."""
     return display.split(" — ")[0].strip()
+
+
+# ── Yahoo Finance Contract Tickers ─────────────────────────────────────
+
+# Map our exchange names to Yahoo Finance suffixes for specific contracts
+_EXCHANGE_TO_YAHOO_SUFFIX = {
+    "CME": "CME",
+    "CBOT": "CBT",
+    "NYMEX": "NYM",
+    "COMEX": "CMX",
+    "ICE": "NYB",
+    "CFE": "CFE",
+}
+
+
+def build_yahoo_contract_ticker(instrument: str, month: int, year: int) -> Optional[str]:
+    """
+    Build a Yahoo Finance ticker for a specific contract month.
+
+    E.g. build_yahoo_contract_ticker("ES", 3, 2026) -> "ESH26.CME"
+         build_yahoo_contract_ticker("ZB", 6, 2026) -> "ZBM26.CBT"
+    """
+    inst = get_instrument(instrument)
+    if inst is None:
+        return None
+    suffix = _EXCHANGE_TO_YAHOO_SUFFIX.get(inst.exchange)
+    if suffix is None:
+        return None
+    code = MONTH_CODES[month]
+    yy = year % 100
+    return f"{instrument}{code}{yy:02d}.{suffix}"
+
+
+# ── Volume Crossover / Roll Signal ────────────────────────────────────
+
+@dataclass
+class RollVolumeData:
+    """Volume comparison data between front and back month contracts."""
+    dates: list
+    front_volume: list[float]
+    back_volume: list[float]
+    front_ticker: str
+    back_ticker: str
+    latest_front_vol: int
+    latest_back_vol: int
+    ratio: float  # back / front; > 1.0 means back month dominates
+
+
+def fetch_roll_volume(
+    instrument: str,
+    front_month: int,
+    front_year: int,
+    back_month: int,
+    back_year: int,
+    period: str = "1mo",
+) -> Optional[RollVolumeData]:
+    """
+    Fetch and compare volume between two contract months to detect
+    the liquidity crossover that signals it's time to roll.
+    """
+    front_ticker = build_yahoo_contract_ticker(instrument, front_month, front_year)
+    back_ticker = build_yahoo_contract_ticker(instrument, back_month, back_year)
+
+    if front_ticker is None or back_ticker is None:
+        return None
+
+    try:
+        data = yf.download(
+            [front_ticker, back_ticker], period=period, progress=False
+        )
+
+        if data.empty:
+            return None
+
+        vol_front = data["Volume"][front_ticker]
+        vol_back = data["Volume"][back_ticker]
+
+        df = pd.DataFrame({"front": vol_front, "back": vol_back}).dropna()
+
+        if df.empty:
+            return None
+
+        latest = df.iloc[-1]
+        ratio = (
+            float(latest["back"]) / float(latest["front"])
+            if latest["front"] > 0
+            else float("inf")
+        )
+
+        return RollVolumeData(
+            dates=df.index.tolist(),
+            front_volume=df["front"].tolist(),
+            back_volume=df["back"].tolist(),
+            front_ticker=front_ticker,
+            back_ticker=back_ticker,
+            latest_front_vol=int(latest["front"]),
+            latest_back_vol=int(latest["back"]),
+            ratio=ratio,
+        )
+
+    except Exception:
+        return None
 
 
 # ── Yahoo Finance Price Fetching ───────────────────────────────────────
