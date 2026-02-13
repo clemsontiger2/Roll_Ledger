@@ -188,147 +188,6 @@ with col3:
         c1.metric("True Net P&L", f"${tpnl:,.2f}" if tpnl is not None else "N/A")
         c2.metric("Banked (Realized)", f"${rpnl:,.2f}")
 
-# ── Interactive Cumulative P&L Chart (Plotly) ─────────────────────────
-
-st.markdown("---")
-st.subheader("Cumulative P&L Curve")
-
-series = ledger.cumulative_pnl_series()
-if series:
-    df_chart = pd.DataFrame(series)
-
-    # Append current unrealized data point
-    if active and current_price > 0:
-        live_pnl = ledger.true_pnl(current_price)
-        if live_pnl is not None:
-            df_chart = pd.concat([
-                df_chart,
-                pd.DataFrame([{
-                    "date": pd.Timestamp.now().strftime("%Y-%m-%d"),
-                    "cum_pnl": live_pnl,
-                    "event": "current (unrealized)",
-                    "contract": active.contract_symbol,
-                    "roll_number": active.roll_number,
-                }]),
-            ], ignore_index=True)
-
-    df_chart["date"] = pd.to_datetime(df_chart["date"])
-
-    fig = px.line(
-        df_chart,
-        x="date",
-        y="cum_pnl",
-        markers=True,
-        hover_data=["contract", "event"],
-        title="True Account Value (Sawtooth Normalized)",
-        labels={"cum_pnl": "Profit/Loss ($)", "date": "Date"},
-    )
-    fig.update_layout(hovermode="x unified")
-
-    # Profit/loss background zones
-    if not df_chart.empty:
-        y_max = max(df_chart["cum_pnl"].max(), 100) * 1.2
-        y_min = min(df_chart["cum_pnl"].min(), -100) * 1.2
-        fig.add_hrect(y0=0, y1=y_max, fillcolor="green", opacity=0.05, line_width=0)
-        fig.add_hrect(y0=y_min, y1=0, fillcolor="red", opacity=0.05, line_width=0)
-
-    st.plotly_chart(fig, use_container_width=True)
-
-# ── Roll Signal: Volume Crossover ─────────────────────────────────────
-
-if active:
-    st.markdown("---")
-    st.subheader("Liquidity Roll Signal")
-
-    # Parse front month from active contract symbol (e.g. "ESH26" -> month=3, year=2026)
-    _code_to_month = {v: k for k, v in MONTH_CODES.items()}
-    _active_sym = active.contract_symbol
-    _front_month_code = _active_sym[-3] if len(_active_sym) >= 3 else None
-    _front_year_2d = _active_sym[-2:] if len(_active_sym) >= 3 else None
-    _front_month = _code_to_month.get(_front_month_code) if _front_month_code else None
-    _front_year = (
-        2000 + int(_front_year_2d)
-        if _front_year_2d and _front_year_2d.isdigit()
-        else None
-    )
-
-    # Smart default: next quarterly month (H->M->U->Z->H)
-    _quarterly = ["H", "M", "U", "Z"]
-    _default_back_idx = 0
-    _default_back_year = _front_year or date.today().year
-    if _front_month_code in _quarterly:
-        _q_idx = _quarterly.index(_front_month_code)
-        _next_q = _quarterly[(_q_idx + 1) % 4]
-        _next_q_month = _code_to_month[_next_q]  # int month number
-        _default_back_idx = _next_q_month - 1     # 0-based index into MONTH_NAMES
-        if _next_q == "H" and _front_month_code == "Z":
-            _default_back_year += 1
-
-    sig_col1, sig_col2, sig_col3 = st.columns([1, 1, 2])
-
-    with sig_col1:
-        st.info(f"Current: **{_active_sym}**")
-
-    with sig_col2:
-        back_month_name = st.selectbox(
-            "Roll To Month", MONTH_NAMES, index=_default_back_idx,
-            key="signal_back_month",
-        )
-        back_year = st.number_input(
-            "Roll To Year", min_value=2000, max_value=2099,
-            value=_default_back_year, step=1, key="signal_back_year",
-        )
-
-    back_month_num = month_from_name(back_month_name)
-    back_symbol = build_contract_symbol(ledger.instrument, back_month_num, back_year)
-
-    with sig_col3:
-        st.write("")
-        if _front_month and _front_year and st.button(
-            "Check Liquidity Crossover", key="check_roll_signal"
-        ):
-            with st.spinner("Analyzing Volume..."):
-                vol_data = fetch_roll_volume(
-                    instrument=ledger.instrument,
-                    front_month=_front_month,
-                    front_year=_front_year,
-                    back_month=back_month_num,
-                    back_year=back_year,
-                )
-
-            if vol_data is None:
-                st.error(
-                    f"Could not fetch volume for {_active_sym} vs {back_symbol}. "
-                    f"Tickers might be missing on Yahoo Finance."
-                )
-            else:
-                vm1, vm2, vm3 = st.columns(3)
-                with vm1:
-                    st.metric(
-                        f"Front Vol ({vol_data.front_ticker})",
-                        f"{vol_data.latest_front_vol:,}",
-                    )
-                with vm2:
-                    st.metric(
-                        f"Back Vol ({vol_data.back_ticker})",
-                        f"{vol_data.latest_back_vol:,}",
-                    )
-                with vm3:
-                    st.metric(
-                        "Volume Ratio",
-                        f"{vol_data.ratio:.2f}x",
-                        delta="ROLL NOW" if vol_data.ratio > 1.0 else "HOLD",
-                        delta_color="normal" if vol_data.ratio > 1.0 else "off",
-                    )
-
-                # Volume crossover chart
-                vol_chart_df = pd.DataFrame({
-                    "Date": vol_data.dates,
-                    "Front": vol_data.front_volume,
-                    "Back": vol_data.back_volume,
-                }).set_index("Date")
-                st.line_chart(vol_chart_df)
-
 # ── Trade Actions ─────────────────────────────────────────────────────
 
 st.markdown("---")
@@ -432,6 +291,147 @@ if active:
                     st.rerun()
 else:
     st.info("No active position. Create a new ledger or import one from the sidebar.")
+
+# ── Liquidity Roll Signal ─────────────────────────────────────────────
+
+if active:
+    st.markdown("---")
+    st.subheader("Liquidity Roll Signal")
+
+    # Parse front month from active contract symbol (e.g. "ESH26" -> month=3, year=2026)
+    _code_to_month = {v: k for k, v in MONTH_CODES.items()}
+    _active_sym = active.contract_symbol
+    _front_month_code = _active_sym[-3] if len(_active_sym) >= 3 else None
+    _front_year_2d = _active_sym[-2:] if len(_active_sym) >= 3 else None
+    _front_month = _code_to_month.get(_front_month_code) if _front_month_code else None
+    _front_year = (
+        2000 + int(_front_year_2d)
+        if _front_year_2d and _front_year_2d.isdigit()
+        else None
+    )
+
+    # Smart default: next quarterly month (H->M->U->Z->H)
+    _quarterly = ["H", "M", "U", "Z"]
+    _default_back_idx = 0
+    _default_back_year = _front_year or date.today().year
+    if _front_month_code in _quarterly:
+        _q_idx = _quarterly.index(_front_month_code)
+        _next_q = _quarterly[(_q_idx + 1) % 4]
+        _next_q_month = _code_to_month[_next_q]  # int month number
+        _default_back_idx = _next_q_month - 1     # 0-based index into MONTH_NAMES
+        if _next_q == "H" and _front_month_code == "Z":
+            _default_back_year += 1
+
+    sig_col1, sig_col2, sig_col3 = st.columns([1, 1, 2])
+
+    with sig_col1:
+        st.info(f"Current: **{_active_sym}**")
+
+    with sig_col2:
+        back_month_name = st.selectbox(
+            "Roll To Month", MONTH_NAMES, index=_default_back_idx,
+            key="signal_back_month",
+        )
+        back_year = st.number_input(
+            "Roll To Year", min_value=2000, max_value=2099,
+            value=_default_back_year, step=1, key="signal_back_year",
+        )
+
+    back_month_num = month_from_name(back_month_name)
+    back_symbol = build_contract_symbol(ledger.instrument, back_month_num, back_year)
+
+    with sig_col3:
+        st.write("")
+        if _front_month and _front_year and st.button(
+            "Check Liquidity Crossover", key="check_roll_signal"
+        ):
+            with st.spinner("Analyzing Volume..."):
+                vol_data = fetch_roll_volume(
+                    instrument=ledger.instrument,
+                    front_month=_front_month,
+                    front_year=_front_year,
+                    back_month=back_month_num,
+                    back_year=back_year,
+                )
+
+            if vol_data is None:
+                st.error(
+                    f"Could not fetch volume for {_active_sym} vs {back_symbol}. "
+                    f"Tickers might be missing on Yahoo Finance."
+                )
+            else:
+                vm1, vm2, vm3 = st.columns(3)
+                with vm1:
+                    st.metric(
+                        f"Front Vol ({vol_data.front_ticker})",
+                        f"{vol_data.latest_front_vol:,}",
+                    )
+                with vm2:
+                    st.metric(
+                        f"Back Vol ({vol_data.back_ticker})",
+                        f"{vol_data.latest_back_vol:,}",
+                    )
+                with vm3:
+                    st.metric(
+                        "Volume Ratio",
+                        f"{vol_data.ratio:.2f}x",
+                        delta="ROLL NOW" if vol_data.ratio > 1.0 else "HOLD",
+                        delta_color="normal" if vol_data.ratio > 1.0 else "off",
+                    )
+
+                # Volume crossover chart
+                vol_chart_df = pd.DataFrame({
+                    "Date": vol_data.dates,
+                    "Front": vol_data.front_volume,
+                    "Back": vol_data.back_volume,
+                }).set_index("Date")
+                st.line_chart(vol_chart_df)
+
+# ── Cumulative P&L Chart (Plotly) ─────────────────────────────────────
+
+st.markdown("---")
+st.subheader("Cumulative P&L Curve")
+
+series = ledger.cumulative_pnl_series()
+if series:
+    df_chart = pd.DataFrame(series)
+
+    # Append current unrealized data point
+    if active and current_price > 0:
+        live_pnl = ledger.true_pnl(current_price)
+        if live_pnl is not None:
+            df_chart = pd.concat([
+                df_chart,
+                pd.DataFrame([{
+                    "date": pd.Timestamp.now().strftime("%Y-%m-%d"),
+                    "cum_pnl": live_pnl,
+                    "event": "current (unrealized)",
+                    "contract": active.contract_symbol,
+                    "roll_number": active.roll_number,
+                }]),
+            ], ignore_index=True)
+
+    df_chart["date"] = pd.to_datetime(df_chart["date"])
+
+    fig = px.line(
+        df_chart,
+        x="date",
+        y="cum_pnl",
+        markers=True,
+        hover_data=["contract", "event"],
+        title="True Account Value (Sawtooth Normalized)",
+        labels={"cum_pnl": "Profit/Loss ($)", "date": "Date"},
+    )
+    fig.update_layout(hovermode="x unified")
+
+    # Profit/loss background zones
+    if not df_chart.empty:
+        y_max = max(df_chart["cum_pnl"].max(), 100) * 1.2
+        y_min = min(df_chart["cum_pnl"].min(), -100) * 1.2
+        fig.add_hrect(y0=0, y1=y_max, fillcolor="green", opacity=0.05, line_width=0)
+        fig.add_hrect(y0=y_min, y1=0, fillcolor="red", opacity=0.05, line_width=0)
+
+    st.plotly_chart(fig, use_container_width=True)
 
 # ── Roll History ──────────────────────────────────────────────────────
 
